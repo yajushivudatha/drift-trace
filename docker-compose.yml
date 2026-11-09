@@ -1,0 +1,90 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: drifttrace
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-drifttrace}
+      POSTGRES_DB: drifttrace
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drifttrace"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  grobid:
+    image: grobid/grobid:0.8.2
+    platform: linux/amd64
+    ports: ["8070:8070"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8070'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  migrate:
+    build: ./backend
+    command: alembic upgrade head
+    env_file: [.env]
+    environment: &backend_env
+      DATABASE_URL: postgresql+psycopg://drifttrace:${POSTGRES_PASSWORD:-drifttrace}@postgres:5432/drifttrace
+      REDIS_URL: redis://redis:6379/0
+      GROBID_URL: http://grobid:8070
+      DATA_DIR: /data
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  backend:
+    build: ./backend
+    command: uvicorn drifttrace.api.main:app --host 0.0.0.0 --port 8000
+    env_file: [.env]
+    environment: *backend_env
+    ports: ["8000:8000"]
+    volumes: [papers:/data, models:/root/.cache/huggingface]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker:
+    build: ./backend
+    command: arq drifttrace.worker.WorkerSettings
+    env_file: [.env]
+    environment: *backend_env
+    volumes: [papers:/data, models:/root/.cache/huggingface]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      grobid: { condition: service_started }
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports: ["3000:3000"]
+    depends_on:
+      backend: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  pgdata:
+  papers:
+  models:

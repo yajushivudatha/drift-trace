@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<article>
+  <front><article-meta>
+    <article-id pub-id-type="doi">10.1234/JATS.1</article-id>
+    <title-group><article-title>A JATS paper</article-title></title-group>
+    <contrib-group><contrib><name><surname>Lindqvist</surname><given-names>Sofia</given-names></name></contrib></contrib-group>
+    <pub-date><year>2021</year></pub-date>
+    <abstract><p>Abstract text.</p></abstract>
+  </article-meta></front>
+  <body>
+    <sec><title>Results</title>
+      <p>Compound X reduces inflammation<sup><xref ref-type="bibr" rid="r1">1</xref></sup>. Ranges are common <xref ref-type="bibr" rid="r1">[1]</xref>–<xref ref-type="bibr" rid="r3">[3]</xref>. Grouped <xref ref-type="bibr" rid="r2 r3">[2,3]</xref> too.<fig id="f1"><caption><p>Must not appear.</p></caption></fig></p>
+      <sec><title>Subgroup</title><p>Mice were studied at e.g. high doses (Fig. 2). Results held.</p></sec>
+    </sec>
+  </body>
+  <back><ref-list>
+    <ref id="r1"><element-citation><article-title>Ref one</article-title><year>2018</year><person-group><name><surname>Lee</surname></name></person-group><pub-id pub-id-type="doi">10.1000/ONE</pub-id></element-citation></ref>
+    <ref id="r2"><mixed-citation>Ref two raw. <article-title>Ref two</article-title> <year>2019</year></mixed-citation></ref>
+    <ref id="r3"><element-citation><source>Book three</source><year>2020</year></element-citation></ref>
+    <ref id="r4"><mixed-citation>Kloosterman WP, Plasterk RH. The diverse functions of microRNAs in animal development and disease. Developmental Cell. 2006;11:441–450. doi: 10.1016/j.devcel.2006.09.009.</mixed-citation></ref>
+  </ref-list></back>
+</article>
