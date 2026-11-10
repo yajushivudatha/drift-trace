@@ -1,8 +1,34 @@
-# DriftTrace
+<h1 align="center">DriftTrace</h1>
 
-Scientific claims mutate as they pass through citations. DriftTrace takes a claim, follows it back through the papers it cites, and shows where and how the meaning changed at each hop, with the exact text from both papers.
+<p align="center"><b>Follow a scientific claim back through its citations and see exactly where the meaning changed.</b></p>
 
-## Run it
+<p align="center">
+  <a href="#quick-start">Quick start</a> &nbsp;&nbsp;
+  <a href="#what-a-trace-shows">What a trace shows</a> &nbsp;&nbsp;
+  <a href="#how-it-works">How it works</a> &nbsp;&nbsp;
+  <a href="#drift-labels">Drift labels</a> &nbsp;&nbsp;
+  <a href="#status">Status</a>
+</p>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/drift-story-dark.png">
+  <img alt="Three sentences from three papers, growing louder over time. In 2018 a mouse experiment reports that compound X reduced serum IL-6 by 12% in diet-induced obese mice at 500 mg/kg per day for 4 weeks, and says the data may suggest an anti-inflammatory action in this model. In 2021 a review says compound X reduces inflammation. In 2024 a survey says compound X treats inflammatory disease in humans." src="docs/readme/drift-story-light.png">
+</picture>
+
+Each citation in that chain looks reasonable if you only check the one before it. Read all three together and a 12% change in one marker in mice has become a human treatment. DriftTrace does that reading: it takes a claim, follows the citations back, and puts the exact text from both papers side by side at every hop.
+
+## See it
+
+<p align="center">
+  <img alt="Walkthrough of the DriftTrace workspace. Clicking citation hops in the graph updates the lineage on the left and the side-by-side evidence on the right. The view then filters to the worst drift path and switches to dark mode." src="docs/readme/demo.gif">
+</p>
+
+<sub>Every image in this README uses the built-in sample trace, which is made of invented papers, except the sentence picker, which shows a real open-access paper. You can load the same trace yourself.</sub>
+
+> [!IMPORTANT]
+> DriftTrace has not yet been run end to end against the real model, so how accurate its labels are is unknown. See [Status](#status) for what has and hasn't been tested.
+
+## Quick start
 
 You need Docker and an [Anthropic API key](https://console.anthropic.com/).
 
@@ -11,30 +37,113 @@ cp .env.example .env     # then set ANTHROPIC_API_KEY and CONTACT_EMAIL
 docker compose up --build
 ```
 
-Open <http://localhost:3000>. The first build takes a while: it installs PyTorch, and the first trace downloads the embedding model. GROBID is an `amd64` image, so on Apple Silicon it runs under emulation and is slower.
+Open <http://localhost:3000>. The first build takes a while because it installs PyTorch, and the first trace downloads the embedding model. GROBID is an `amd64` image, so on Apple Silicon it runs under emulation and is slower.
 
-To explore the interface before adding a key, load a trace built from invented papers. It is labeled as sample data wherever it appears:
+To explore the interface without an API key, load the sample trace. It is labeled as sample data wherever it appears.
 
 ```bash
 docker compose exec backend drifttrace seed-sample
 ```
 
-## How a trace works
+## What a trace shows
 
-1. Resolve the paper's metadata and retraction status (OpenAlex, then Semantic Scholar and Crossref).
-2. Fetch open-access full text (upload, Unpaywall, Europe PMC, arXiv, publisher OA) and parse it into sections, sentences and citation markers.
-3. Find the claim sentence and resolve each citation to a DOI.
-4. Extract a structured reading of the claim.
-5. Retrieve the most relevant passages from the cited paper (BM25 plus embeddings, then an LLM rerank).
-6. Judge the claim against those passages and verify every quotation against the stored text.
-7. If the source only cites someone else for the point, continue from there.
-8. Score the chain. The formula is shown in the app and printed in every report.
+### The evidence for every hop
 
-Rules enforced in code rather than left to the model, in `backend/drifttrace/pipeline/judge.py` and `quotes.py`:
+Click any citation in the graph to compare the two papers. Dropped conditions are struck through, lost hedges are highlighted, and the verbs that carry causal strength are boxed. Below that, the claim and the source are compared field by field. If you disagree with a verdict, you can correct it.
 
-- A quotation must occur in the stored text. Tolerance covers whitespace, line-break hyphens, ligatures and typographic quotes, and numbers must match exactly. A verdict whose quotes fail is retried once, then discarded as unverifiable.
-- A source read only as an abstract can never be labeled unsupported, and its confidence is capped at medium.
-- Sources that could not be read add no penalty, and a trace with nothing readable has no score rather than a score of zero.
+<img alt="Evidence panel for one hop. The review claims compound X reduces inflammation. The source says it reduced serum IL-6 by 12% in diet-induced obese mice at 500 mg/kg per day for 4 weeks, with that condition struck through and the phrase may suggest highlighted. Labels read condition dropped, scope broadened and hedge lost. A table compares subject, population, conditions, causal strength, hedging, magnitude and study type." src="docs/readme/evidence.png">
+
+### The whole citation tree
+
+The score, the lineage and the graph share one workspace. Retracted sources are flagged on the node itself, and the worst path can be isolated with one click.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/workspace-dark.png">
+  <img alt="The full DriftTrace workspace showing a fidelity score of 60, the claim, a lineage column, a citation graph with five papers including one flagged as retracted, and an evidence column." src="docs/readme/workspace-light.png">
+</picture>
+
+### Start from the sentence you doubt
+
+Enter a DOI and pick a citing sentence from the paper's own text, upload a PDF and select one, or type a free-text claim.
+
+<p align="center">
+  <img width="640" alt="Dialog titled pick a sentence that cites a source, listing sentences from the introduction of a real paper with their citation markers. One sentence is highlighted." src="docs/readme/sentence-picker.png">
+</p>
+
+### Reports you can share
+
+Every trace becomes a printable report containing the quotes, the methodology, the scoring formula and the limitations. Traces can also be exported as Markdown, PDF or JSON, or shared by link.
+
+<p align="center">
+  <img width="620" alt="Printable report for the sample trace: the claim, a fidelity score of 60, and a numbered drift path with claimed text, source text and an explanation for each hop." src="docs/readme/report.png">
+</p>
+
+### Human review feeds the evaluation set
+
+Hops where a reader disagreed, or where confidence was low, go to a review queue. The gold labels set there export in the same format as the evaluation dataset.
+
+<img alt="Review queue card showing the system's label condition dropped next to the user's correction scope broadened, the two quotes, the user's note, and a control to save a gold label." src="docs/readme/review.png">
+
+### Also on your phone
+
+<p align="center">
+  <img width="720" alt="Three phone screens showing the lineage, graph and evidence tabs of a trace." src="docs/readme/mobile.png">
+</p>
+
+## How it works
+
+```mermaid
+flowchart TD
+    A([Claim, DOI or PDF]) --> B[Resolve the paper and its retraction status]
+    B --> C[Fetch open-access full text and parse it]
+    C --> D[Find the claim sentence and resolve its citations]
+    D --> E[Extract a structured reading of the claim]
+    E --> F[Retrieve the best passages from the cited paper]
+    F --> G[Judge the claim against those passages]
+    G --> H{Is every quote in<br/>the stored text?}
+    H -- No, after one retry --> U[Mark as could not verify]
+    H -- Yes --> I{Does the source only<br/>cite someone else?}
+    I -- Yes --> C
+    I -- No --> J([Score the chain])
+    U --> J
+```
+
+Retrieval combines BM25 and embeddings, then a language model reranks the results. Metadata comes from OpenAlex, Semantic Scholar and Crossref. Full text comes from your upload, Unpaywall, Europe PMC, arXiv or publisher open access.
+
+These rules are enforced in code rather than left to the model, in [`judge.py`](backend/drifttrace/pipeline/judge.py) and [`quotes.py`](backend/drifttrace/pipeline/quotes.py):
+
+- **A quotation must occur in the stored text.** Tolerance covers whitespace, line-break hyphens, ligatures and typographic quotes, and numbers must match exactly. A verdict whose quotes fail is retried once, then discarded as unverifiable.
+- **An abstract is not enough to condemn a citation.** A source read only as an abstract can never be labeled unsupported, and its confidence is capped at medium.
+- **Missing evidence is not bad evidence.** Sources that could not be read add no penalty, and a trace with nothing readable has no score rather than a score of zero.
+
+## Drift labels
+
+| Label | Severity | What happened |
+|---|:---:|---|
+| Faithful | 0 | The source supports the claim as stated. |
+| Secondhand | 0 | The source only cites other work for this, so the trace continues there. |
+| Could not verify | 0 | The source could not be read well enough to decide. |
+| Hedge lost | 1 | Uncertainty in the source was dropped. |
+| Condition dropped | 1 | A dose, duration, subgroup or context was removed. |
+| Scope broadened | 2 | The finding was applied to a wider population or setting. |
+| Causal inflation | 2 | An association was upgraded to causation. |
+| Magnitude changed | 2 | An effect size or number was changed or overstated. |
+| Contradicted | 3 | The source reports the opposite or a null result. |
+| Not in source | 3 | The claim does not appear anywhere in the source. |
+| Retracted source | 3 | The source is retracted or has an expression of concern. |
+
+### The score is plain arithmetic
+
+Fidelity is 100 minus the penalty of the worst path through the tree. Each hop's penalty is its severity penalty multiplied by a confidence weight, and each secondary label adds 25% of its own penalty.
+
+| Severity | Penalty | | Confidence | Weight |
+|:---:|:---:|---|:---:|:---:|
+| 0 | 0 | | High | 1.0 |
+| 1 | 8 | | Medium | 0.75 |
+| 2 | 18 | | Low | 0.5 |
+| 3 | 35 | | | |
+
+In the sample trace, the worst path is the single hop to the retracted paper. Its penalty is 35 for the retraction plus 4.5 for a secondary magnitude change, or 39.5 in total, which leaves a displayed score of 60. The formula is shown in the app and printed in every report.
 
 ## Development
 
