@@ -1,5 +1,6 @@
 """Paper resolution and full-text acquisition (pipeline steps 1 and 2)."""
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -106,7 +107,9 @@ async def parse_pdf(pdf: bytes) -> tuple[ParsedDoc, str | None]:
             return parse_tei(tei), tei
         except ValueError as exc:
             log.warning("Unusable GROBID output, falling back to plain text: %s", exc)
-    return parse_plain_pdf(pdf), None
+    # pdfium extraction is synchronous and can take seconds on a long paper. Running it in a thread
+    # keeps the API answering (and the worker's other trace moving) meanwhile.
+    return await asyncio.to_thread(parse_plain_pdf, pdf), None
 
 
 def _commit_parsed(paper: Paper, parsed: ParsedDoc, source: str, tei: str | None) -> None:

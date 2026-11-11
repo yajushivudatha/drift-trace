@@ -46,6 +46,7 @@ class RawResponse:
     input_tokens: int
     output_tokens: int
     model: str
+    stop_reason: str = "end_turn"
 
 
 Transport = Callable[[str, str, str, dict[str, Any], str], Awaitable[RawResponse]]
@@ -91,6 +92,20 @@ def api_schema(model: type[BaseModel]) -> dict[str, Any]:
 
     clean(schema)
     return schema
+
+
+def answer_text(content: list[Any]) -> str:
+    """The response text, without any partial output from a model that declined and was replaced.
+
+    A `fallback` block marks where another model took over, so only text after the last one counts.
+    """
+    parts: list[str] = []
+    for block in content:
+        if block.type == "fallback":
+            parts = []
+        elif block.type == "text":
+            parts.append(block.text)
+    return "".join(parts)
 
 
 _client: anthropic.AsyncAnthropic | None = None
@@ -145,17 +160,14 @@ async def _call_anthropic(
     except anthropic.APIConnectionError as exc:
         raise LLMUnavailable("Could not reach the Anthropic API.") from exc
 
-    if message.stop_reason == "refusal":
-        raise LLMRefusal("The model declined to assess this passage.")
-    if message.stop_reason == "max_tokens":
-        raise ValueError("The response hit max_tokens before completing.")
-
-    text = next(block.text for block in message.content if block.type == "text")
+    # Refusals and truncation are returned, not raised, so that `complete_json` records the tokens
+    # they cost before deciding what to do with them.
     return RawResponse(
-        text=text,
+        text=answer_text(message.content),
         input_tokens=message.usage.input_tokens,
         output_tokens=message.usage.output_tokens,
         model=message.model,
+        stop_reason=message.stop_reason or "end_turn",
     )
 
 
@@ -183,6 +195,18 @@ async def _record(
                 latency_ms=latency_ms,
             )
         )
+        await session.commit()
+
+
+async def _cache_get(key: str) -> dict | None:
+    async with session_scope() as session:
+        cached = await session.scalar(select(LLMCache).where(LLMCache.key == key))
+    return cached.response if cached is not None else None
+
+
+async def _cache_put(key: str, response: dict) -> None:
+    async with session_scope() as session:
+        await session.execute(insert(LLMCache).values(key=key, response=response).on_conflict_do_nothing())
         await session.commit()
 
 
@@ -215,11 +239,10 @@ async def complete_json(
         json.dumps([model, effort, system, user, schema], sort_keys=True).encode()
     ).hexdigest()
 
-    async with session_scope() as session:
-        cached = await session.scalar(select(LLMCache).where(LLMCache.key == key))
+    cached = await _cache_get(key)
     if cached is not None:
         await _record(purpose, model, 0, 0, True, 0)
-        return output.model_validate(cached.response)
+        return output.model_validate(cached)
 
     transport = _transport_override or _call_anthropic
     last_error: Exception | None = None
@@ -228,19 +251,19 @@ async def complete_json(
         raw = await transport(system, user, model, schema, effort)
         latency = int((time.monotonic() - started) * 1000)
         await _record(purpose, raw.model, raw.input_tokens, raw.output_tokens, False, latency)
+        if raw.stop_reason == "refusal":
+            raise LLMRefusal("The model declined to assess this passage.")
+        if raw.stop_reason == "max_tokens":
+            last_error = ValueError(f"the response reached LLM_MAX_TOKENS={settings.llm_max_tokens}")
+            log.warning("%s attempt %d was truncated at max_tokens", purpose, attempt + 1)
+            continue
         try:
             parsed = output.model_validate(json.loads(raw.text))
         except (json.JSONDecodeError, ValidationError) as exc:
             last_error = exc
             log.warning("%s attempt %d returned invalid output: %s", purpose, attempt + 1, exc)
             continue
-        async with session_scope() as session:
-            await session.execute(
-                insert(LLMCache)
-                .values(key=key, response=parsed.model_dump(mode="json"))
-                .on_conflict_do_nothing()
-            )
-            await session.commit()
+        await _cache_put(key, parsed.model_dump(mode="json"))
         return parsed
 
     raise LLMUnavailable(f"{purpose} returned invalid output after retries: {last_error}")

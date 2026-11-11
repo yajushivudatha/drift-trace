@@ -2,6 +2,7 @@
 
 import io
 import re
+import threading
 from collections.abc import Iterable
 
 import pypdfium2
@@ -263,19 +264,24 @@ _HEADING = re.compile(
 )
 
 
+# pdfium is not thread-safe, and parse_pdf runs this in a worker thread, so calls take turns.
+_PDFIUM_LOCK = threading.Lock()
+
+
 def _extract_pages(pdf: bytes) -> list[str]:
-    document = pypdfium2.PdfDocument(io.BytesIO(pdf))
-    try:
-        pages = []
-        for index in range(len(document)):
-            page = document[index]
-            textpage = page.get_textpage()
-            pages.append(textpage.get_text_range())
-            textpage.close()
-            page.close()
-        return pages
-    finally:
-        document.close()
+    with _PDFIUM_LOCK:
+        document = pypdfium2.PdfDocument(io.BytesIO(pdf))
+        try:
+            pages = []
+            for index in range(len(document)):
+                page = document[index]
+                textpage = page.get_textpage()
+                pages.append(textpage.get_text_range())
+                textpage.close()
+                page.close()
+            return pages
+        finally:
+            document.close()
 
 
 def _plain_references(lines: Iterable[str]) -> list[RefEntry]:

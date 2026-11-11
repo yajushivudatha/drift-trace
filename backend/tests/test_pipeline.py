@@ -128,6 +128,40 @@ async def test_retry_success_keeps_verdict(clean_db):
     assert hops[0].primary_label == "SCOPE_GENERALIZATION" and hops[0].quotes_verified
 
 
+async def test_refused_claim_extraction_marks_hops_unverifiable_and_finishes(clean_db):
+    await make_paper("10.1/a", "Citing", [para(SENTENCE, {"[1]": ["b0", "b1"]})], {"b0": "10.1/b", "b1": "10.1/c"})
+    await make_paper("10.1/b", "Middle", [para("Compound X reduces inflammation.")])
+    await make_paper("10.1/c", "Origin", [para("Compound X reduced IL-6 by 12% in obese mice at 500 mg/kg.")])
+    llm = ScriptedLLM({}, refuse={"extract"})
+    set_transport(llm)
+    trace_id = await make_trace()
+    await run_trace(trace_id)
+    trace, _, hops = await load(trace_id)
+
+    assert trace.status == "done", trace.error
+    assert len(hops) == 2 and all(h.primary_label == "UNVERIFIABLE" for h in hops)
+    assert all("declined" in h.explanation for h in hops)
+    assert [kind for kind, _ in llm.calls].count("extract") == 1, "one claim, one extraction, even when refused"
+    assert trace.fidelity_score is None
+
+
+async def test_refused_rerank_still_reaches_a_verdict(clean_db):
+    filler = "The cohort was followed for twelve weeks with fasting blood draws and standardized diets. " * 2
+    long_paragraphs = [para(f"Compound X was studied in cohort {i} and reduced IL-6 by {i}% in obese mice. {filler}") for i in range(6)]
+    await make_paper("10.1/a", "Citing", [para(SENTENCE, {"[1]": ["b0"]})], {"b0": "10.1/c"})
+    await make_paper("10.1/c", "Origin", long_paragraphs)
+    quote = "Compound X was studied in cohort 1 and reduced IL-6 by 1% in obese mice."
+    llm = ScriptedLLM({"Origin": judgment("SCOPE_GENERALIZATION", SENTENCE, [quote])}, refuse={"rerank"})
+    set_transport(llm)
+    trace_id = await make_trace()
+    await run_trace(trace_id)
+    trace, _, hops = await load(trace_id)
+
+    assert trace.status == "done", trace.error
+    assert "rerank" in [kind for kind, _ in llm.calls], "enough passages to need reranking"
+    assert hops[0].primary_label == "SCOPE_GENERALIZATION"
+
+
 async def test_abstract_only_source_is_never_unsupported(clean_db):
     await make_paper("10.1/a", "Citing", [para(SENTENCE, {"[1]": ["b0"]})], {"b0": "10.1/c"})
     await make_paper("10.1/c", "Origin", [], status="ABSTRACT_ONLY")

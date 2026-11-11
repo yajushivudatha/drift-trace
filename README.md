@@ -196,7 +196,7 @@ The gold set has 70 hops. 48 are adapted from [SciFact](https://github.com/allen
 
 Not yet verified:
 
-- **The judge has never run against the real model.** Every test uses a stand-in for the LLM, so label quality is unmeasured. Run `make eval` first. The code targets `claude-opus-5-5` by default, and the request shape has not been accepted by the live API.
+- **The judge has never run against the real model.** Every test uses a stand-in for the LLM, so label quality is unmeasured. Run `make eval` first. `.env.example` sets `LLM_MODEL=claude-opus-5-5` (the code itself has no default model), and the request shape has not been accepted by the live API.
 - **`docker compose up` has not been run.** The services were tested individually, outside Docker, on Python 3.11.
 - **GROBID has not been run live.** The TEI parser is tested on a fixture modeled on GROBID's format. Until GROBID is confirmed, treat PDF parsing as unproven. Sources available from Europe PMC do not depend on it, and without GROBID PDFs fall back to plain text at lower confidence.
 

@@ -4,7 +4,7 @@ import logging
 import re
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import numpy as np
@@ -16,11 +16,11 @@ from drifttrace.db.session import session_scope
 from drifttrace.external.http import Polite
 from drifttrace.ingest.embeddings import embed
 from drifttrace.ingest.service import PaperNotFound, ensure_fulltext, resolve_paper, resolve_reference
-from drifttrace.llm import trace_scope
-from drifttrace.pipeline.judge import Verdict, extract_claim, run_hop, unverifiable
+from drifttrace.llm import LLMRefusal, LLMUnavailable, trace_scope
+from drifttrace.pipeline.judge import Verdict, apply_retraction, extract_claim, run_hop, unverifiable
 from drifttrace.pipeline.locate import ClaimContext, find_sentence, unique_ref_keys
 from drifttrace.pipeline.quotes import squash
-from drifttrace.schemas import CitationMarker, ParsedDoc
+from drifttrace.schemas import CitationMarker, ClaimFrame, ParsedDoc
 from drifttrace.taxonomy import SEVERITY, Label, ScoredHop, fidelity_score, worst_path
 
 log = logging.getLogger(__name__)
@@ -76,6 +76,19 @@ class Work:
     targets: list[Target]
     depth: int
     path: frozenset[uuid.UUID]
+    # The claim is the same for every target, so it is extracted once. A refusal is kept too, so
+    # that it is not requested again for each cited paper.
+    claim_frame: ClaimFrame | LLMRefusal | None = field(default=None, compare=False)
+
+    async def frame(self) -> ClaimFrame:
+        if self.claim_frame is None:
+            try:
+                self.claim_frame = await extract_claim(self.context)
+            except LLMRefusal as exc:
+                self.claim_frame = exc
+        if isinstance(self.claim_frame, LLMRefusal):
+            raise self.claim_frame
+        return self.claim_frame
 
 
 class TraceRunner:
@@ -250,8 +263,14 @@ class TraceRunner:
 
         node = self.nodes_by_paper.get(paper.id) or await self.add_node(paper, depth, paper.title)
         await self.say(f"Comparing hop {depth} against {short_cite(paper)}")
-        claim_frame = await extract_claim(work.context)
-        verdict = await run_hop(self.session, work.context, claim_frame, paper)
+        try:
+            verdict = await run_hop(self.session, work.context, await work.frame(), paper)
+        except LLMRefusal as exc:
+            verdict = unverifiable(
+                f"{exc} This hop was not assessed.", work.context.sentence, paper.fulltext_status or "NONE"
+            )
+            if paper.is_retracted:
+                verdict = apply_retraction(verdict, paper)
         await self.store_hop(work, node, target, verdict)
         await self.report_cost()
 
@@ -423,10 +442,10 @@ async def run_trace(trace_id: uuid.UUID) -> None:
             await runner.say("Trace cancelled", kind="status", status="cancelled")
         except Exception as exc:  # noqa: BLE001 - any failure must end up visible on the trace
             await session.rollback()
-            message = str(exc) if exc.__class__.__name__ in ("TraceInputError", "LLMUnavailable") else (
-                "The trace stopped because of an internal error. Details are in the worker log."
-            )
-            if message.startswith("The trace stopped"):
+            if isinstance(exc, TraceInputError | LLMUnavailable):
+                message = str(exc)
+            else:
+                message = "The trace stopped because of an internal error. Details are in the worker log."
                 log.exception("Trace %s failed", trace_id)
             trace.status = "failed"
             trace.error = message

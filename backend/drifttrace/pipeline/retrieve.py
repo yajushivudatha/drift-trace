@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from drifttrace.db.models import Chunk
 from drifttrace.ingest.embeddings import embed
-from drifttrace.llm import complete_json
+from drifttrace.llm import LLMRefusal, complete_json
 from drifttrace.llm.prompts import load_prompt
 from drifttrace.schemas import RerankResult
 
@@ -86,10 +86,15 @@ def format_passages(passages: list[Passage]) -> str:
 async def rerank(claim: str, candidates: list[Passage]) -> list[Passage]:
     if len(candidates) <= FINAL_PASSAGES:
         return candidates
-    result = await complete_json(
-        load_prompt("rerank"), RerankResult, "rerank",
-        claim=claim, limit=str(FINAL_PASSAGES), passages=format_passages(candidates),
-    )
+    try:
+        result = await complete_json(
+            load_prompt("rerank"), RerankResult, "rerank",
+            claim=claim, limit=str(FINAL_PASSAGES), passages=format_passages(candidates),
+        )
+    except LLMRefusal:
+        # Reranking only orders passages. The fused retrieval order is a sound fallback, and the
+        # judge still gets its own chance to assess (or decline) the hop.
+        return candidates[:FINAL_PASSAGES]
     by_id = {p.id: p for p in candidates}
     chosen = [by_id[i] for i in dict.fromkeys(result.passage_ids) if i in by_id][:FINAL_PASSAGES]
     # The judge needs the closest text even when nothing bears on the claim, so that an

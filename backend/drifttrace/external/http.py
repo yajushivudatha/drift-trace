@@ -4,6 +4,7 @@ import asyncio
 import email.utils
 import logging
 import time
+from datetime import timezone
 from urllib.parse import urlparse
 
 import httpx
@@ -59,27 +60,38 @@ class Polite:
 
     @staticmethod
     def _retry_after(response: httpx.Response, attempt: int) -> float:
-        header = response.headers.get("retry-after")
+        """Seconds to wait before retrying. A malformed Retry-After falls back to backoff."""
+        header = (response.headers.get("retry-after") or "").strip()
+        if header.isdigit():
+            return min(float(header), 60.0)
         if header:
-            if header.isdigit():
-                return min(float(header), 60.0)
-            parsed = email.utils.parsedate_to_datetime(header)
-            return min(max(parsed.timestamp() - time.time(), 0.0), 60.0)
+            try:
+                parsed = email.utils.parsedate_to_datetime(header)
+            except (TypeError, ValueError):
+                parsed = None
+            if parsed is not None:
+                if parsed.tzinfo is None:  # HTTP dates are GMT
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return min(max(parsed.timestamp() - time.time(), 0.0), 60.0)
         return min(2.0**attempt, 30.0)
 
     async def get(self, url: str, **kwargs) -> httpx.Response | None:
         """GET with pacing and retries. Returns None when the resource is unavailable."""
         host = urlparse(url).hostname or ""
         for attempt in range(self.retries):
+            last_attempt = attempt == self.retries - 1
             await self._pace(host)
             try:
                 response = await self.client.get(url, **kwargs)
             except httpx.TransportError as exc:
                 log.info("GET %s failed: %s", url, exc)
-                await asyncio.sleep(min(2.0**attempt, 10.0))
+                if not last_attempt:
+                    await asyncio.sleep(min(2.0**attempt, 10.0))
                 continue
             if response.status_code == 429 or response.status_code >= 500:
-                await asyncio.sleep(self._retry_after(response, attempt))
+                # No point waiting out a Retry-After that is followed by giving up.
+                if not last_attempt:
+                    await asyncio.sleep(self._retry_after(response, attempt))
                 continue
             if response.status_code >= 400:
                 return None
